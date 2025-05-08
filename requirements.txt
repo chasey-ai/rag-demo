@@ -1,0 +1,31 @@
+# Core dependencies
+haystack-ai>=2.0.0
+chainlit==2.5.5
+python-dotenv>=1.0.0
+pydantic==2.11.4
+pydantic-settings==2.9.1
+
+# LLM providers
+openai>=1.12.0
+anthropic==0.51.0
+
+# Document processing
+filetype==1.2.0
+
+# Web services
+fastapi==0.115.12
+uvicorn==0.34.2
+
+# Async support
+aiohttp==3.11.18
+asyncer==0.0.7
+httpx==0.28.1
+
+# Utilities
+numpy==2.2.5
+pyyaml==6.0.2
+tqdm==4.67.1
+
+# Additional dependencies
+matplotlib>=3.7.0
+pandas>=2.0.0
