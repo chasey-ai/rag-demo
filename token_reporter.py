@@ -200,7 +200,7 @@ def generate_token_usage_report(token_log_file="token_usage_log.json", pipeline_
     """
     
     # 添加Pipeline组件信息
-    component_summary = pipeline_data["summary"]
+    component_summary = pipeline_data["component_stats"]
     for component_name, stats in component_summary.items():
         html += f"""
             <h3>组件: {component_name}</h3>

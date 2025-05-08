@@ -13,17 +13,18 @@ from datetime import datetime
 import inspect
 import os
 
-# 尝试导入token报告生成器
-try:
-    from token_reporter import generate_token_usage_report
-    REPORTER_AVAILABLE = True
-except ImportError:
-    REPORTER_AVAILABLE = False
-
-# 尝试导入可视化库
+# 检查是否可以使用可视化功能
 try:
     import matplotlib.pyplot as plt
     import pandas as pd
+    import numpy as np
+    
+    # 配置matplotlib支持中文字体
+    import matplotlib as mpl
+    # 尝试使用系统中的中文字体
+    plt.rcParams['font.sans-serif'] = ['Arial Unicode MS', 'SimHei', 'Microsoft YaHei', 'WenQuanYi Micro Hei'] + plt.rcParams['font.sans-serif']
+    plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
+    
     VISUALIZATION_AVAILABLE = True
 except ImportError:
     VISUALIZATION_AVAILABLE = False
@@ -55,230 +56,9 @@ prompt_template = [
 ]
 
 
-class PipelineMonitor:
-    """管道监控器，用于记录和分析pipeline中每个组件的执行情况"""
-    
-    def __init__(self):
-        self.component_stats = {}
-        self.current_run = {}
-    
-    async def component_callback(self, component_name, data):
-        """组件运行前后的回调函数"""
-        # 创建组件统计记录（如果不存在）
-        if component_name not in self.component_stats:
-            self.component_stats[component_name] = {
-                "total_calls": 0,
-                "total_time": 0,
-                "runs": []
-            }
-        
-        # 记录运行开始时间
-        start_time = time.time()
-        
-        # 记录输入数据
-        run_record = {
-            "start_time": datetime.now().isoformat(),
-            "input_data": self._sanitize_data(data)
-        }
-        
-        # 保存当前运行记录
-        self.current_run[component_name] = run_record
-        
-        # 返回原始数据，允许pipeline继续运行
-        return data
-    
-    async def component_completion_callback(self, component_name, data):
-        """组件运行完成后的回调函数"""
-        if component_name in self.current_run:
-            run_record = self.current_run[component_name]
-            end_time = time.time()
-            
-            # 计算持续时间
-            if "start_time" in run_record:
-                start = datetime.fromisoformat(run_record["start_time"])
-                duration = (datetime.now() - start).total_seconds()
-                run_record["duration"] = duration
-                
-                # 更新组件统计
-                self.component_stats[component_name]["total_calls"] += 1
-                self.component_stats[component_name]["total_time"] += duration
-            
-            # 记录输出数据
-            run_record["output_data"] = self._sanitize_data(data)
-            
-            # 保存运行记录到组件统计中
-            self.component_stats[component_name]["runs"].append(run_record)
-            
-            # 清理当前运行记录
-            del self.current_run[component_name]
-        
-        # 返回原始数据，允许pipeline继续运行
-        return data
-    
-    def _sanitize_data(self, data):
-        """净化数据，删除不可序列化的内容"""
-        if isinstance(data, dict):
-            return {k: self._sanitize_data(v) for k, v in data.items()}
-        elif isinstance(data, list):
-            return [self._sanitize_data(item) for item in data]
-        elif hasattr(data, "__dict__"):
-            # 尝试获取对象的字典表示
-            try:
-                return self._sanitize_data(vars(data))
-            except:
-                return str(data)
-        elif inspect.isfunction(data) or inspect.ismethod(data):
-            return f"<function {data.__name__}>"
-        else:
-            # 尝试JSON序列化，如果失败则转换为字符串
-            try:
-                json.dumps(data)
-                return data
-            except:
-                return str(data)
-    
-    def get_summary(self):
-        """获取所有组件的统计摘要"""
-        summary = {}
-        
-        for component_name, stats in self.component_stats.items():
-            component_summary = {
-                "total_calls": stats["total_calls"],
-                "total_time": stats["total_time"],
-                "avg_time": stats["total_time"] / stats["total_calls"] if stats["total_calls"] > 0 else 0
-            }
-            
-            # 对于LLM组件，添加token使用情况
-            if component_name == "llm" and stats["runs"]:
-                token_stats = {
-                    "total_prompt_tokens": 0,
-                    "total_completion_tokens": 0,
-                    "total_tokens": 0
-                }
-                
-                for run in stats["runs"]:
-                    if "output_data" in run and "replies" in run["output_data"]:
-                        for reply in run["output_data"]["replies"]:
-                            if hasattr(reply, "_meta") and "usage" in reply._meta:
-                                usage = reply._meta["usage"]
-                                token_stats["total_prompt_tokens"] += usage.get("prompt_tokens", 0)
-                                token_stats["total_completion_tokens"] += usage.get("completion_tokens", 0)
-                                token_stats["total_tokens"] += usage.get("total_tokens", 0)
-                
-                component_summary.update(token_stats)
-            
-            summary[component_name] = component_summary
-        
-        return summary
-    
-    def print_summary(self):
-        """打印所有组件的统计摘要"""
-        summary = self.get_summary()
-        
-        print("\n===== Pipeline组件执行统计 =====")
-        for component_name, stats in summary.items():
-            print(f"\n组件: {component_name}")
-            print(f"  调用次数: {stats['total_calls']}")
-            print(f"  总执行时间: {stats['total_time']:.2f}秒")
-            print(f"  平均执行时间: {stats['avg_time']:.2f}秒")
-            
-            # 打印token使用情况（如果有）
-            if "total_prompt_tokens" in stats:
-                print(f"  提示词tokens总数: {stats['total_prompt_tokens']}")
-                print(f"  补全tokens总数: {stats['total_completion_tokens']}")
-                print(f"  总tokens: {stats['total_tokens']}")
-    
-    def visualize_component_timing(self, output_file="component_timing.png"):
-        """可视化组件执行时间"""
-        if not VISUALIZATION_AVAILABLE:
-            print("无法生成可视化: 缺少 matplotlib 或 pandas 库")
-            return
-        
-        summary = self.get_summary()
-        
-        # 准备数据
-        components = []
-        avg_times = []
-        total_times = []
-        
-        for component_name, stats in summary.items():
-            components.append(component_name)
-            avg_times.append(stats["avg_time"])
-            total_times.append(stats["total_time"])
-        
-        # 创建DataFrame
-        df = pd.DataFrame({
-            "组件": components,
-            "平均执行时间(秒)": avg_times,
-            "总执行时间(秒)": total_times
-        })
-        
-        # 创建图表
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
-        
-        # 平均执行时间图表
-        df.plot(x="组件", y="平均执行时间(秒)", kind="bar", ax=ax1, color="skyblue")
-        ax1.set_title("各组件平均执行时间")
-        ax1.set_ylabel("执行时间(秒)")
-        ax1.grid(axis="y", linestyle="--", alpha=0.7)
-        
-        # 总执行时间图表
-        df.plot(x="组件", y="总执行时间(秒)", kind="bar", ax=ax2, color="salmon")
-        ax2.set_title("各组件总执行时间")
-        ax2.set_ylabel("执行时间(秒)")
-        ax2.grid(axis="y", linestyle="--", alpha=0.7)
-        
-        plt.tight_layout()
-        plt.savefig(output_file)
-        print(f"组件时间图表已保存到 {output_file}")
-    
-    def save_to_file(self, filename="pipeline_stats.json"):
-        """保存统计数据到文件"""
-        with open(filename, "w") as f:
-            json.dump({
-                "component_stats": self.component_stats,
-                "summary": self.get_summary()
-            }, f, indent=2, default=str)
-        
-        print(f"\n组件统计数据已保存到 {filename}")
-        
-        # 生成可视化
-        if VISUALIZATION_AVAILABLE:
-            # 创建存储图表的目录
-            charts_dir = "token_usage_charts"
-            os.makedirs(charts_dir, exist_ok=True)
-            
-            # 生成组件时间图表
-            self.visualize_component_timing(os.path.join(charts_dir, "component_timing.png"))
-
-# 创建管道监控器
-pipeline_monitor = PipelineMonitor()
-
-# 创建组件
-retriever = InMemoryBM25Retriever(document_store=document_store)
-prompt_builder = ChatPromptBuilder(template=prompt_template)
-llm = OpenAIChatGenerator()
-
-# 创建异步管道
-rag_pipeline = AsyncPipeline()
-rag_pipeline.add_component("retriever", retriever)
-rag_pipeline.add_component("prompt_builder", prompt_builder)
-rag_pipeline.add_component("llm", llm)
-
-# 连接组件
-rag_pipeline.connect("retriever", "prompt_builder.documents")
-rag_pipeline.connect("prompt_builder", "llm")
-
-# 添加回调
-for component_name in ["retriever", "prompt_builder", "llm"]:
-    rag_pipeline.add_component_callback(
-        component_name, 
-        pipeline_monitor.component_callback, 
-        pipeline_monitor.component_completion_callback
-    )
-
-# 初始化token使用记录器
 class TokenUsageTracker:
+    """Token使用跟踪器，用于记录LLM调用的token使用情况"""
+    
     def __init__(self, log_file="token_usage_log.json"):
         self.log_file = log_file
         self.usage_records = []
@@ -388,6 +168,10 @@ class TokenUsageTracker:
         os.makedirs(charts_dir, exist_ok=True)
         
         # 准备查询数据
+        if not self.usage_records:
+            print("无记录数据可供可视化")
+            return
+            
         queries = [record["query"] for record in self.usage_records]
         prompt_tokens = [record["usage"]["prompt_tokens"] for record in self.usage_records]
         completion_tokens = [record["usage"]["completion_tokens"] for record in self.usage_records]
@@ -496,8 +280,192 @@ class TokenUsageTracker:
         if VISUALIZATION_AVAILABLE and self.usage_records:
             self.visualize_token_usage()
 
-# 创建token使用跟踪器
+
+class PipelineAnalyzer:
+    """Pipeline分析器，用于记录Pipeline执行性能"""
+    
+    def __init__(self, stats_file="pipeline_stats.json"):
+        self.stats_file = stats_file
+        self.component_times = {}
+        self.component_counts = {}
+        self.llm_token_usage = {
+            "total_prompt_tokens": 0,
+            "total_completion_tokens": 0,
+            "total_tokens": 0
+        }
+    
+    def record_llm_usage(self, results):
+        """记录LLM的token使用情况"""
+        if "llm" in results and "replies" in results["llm"]:
+            message = results["llm"]["replies"][0]
+            if hasattr(message, "_meta") and "usage" in message._meta:
+                usage = message._meta["usage"]
+                self.llm_token_usage["total_prompt_tokens"] += usage.get("prompt_tokens", 0)
+                self.llm_token_usage["total_completion_tokens"] += usage.get("completion_tokens", 0)
+                self.llm_token_usage["total_tokens"] += usage.get("total_tokens", 0)
+    
+    async def analyze_pipeline_execution(self, pipeline, data, include_outputs=None):
+        """分析Pipeline执行过程中的性能指标"""
+        start_times = {}
+        component_results = {}
+        
+        # 监控执行开始
+        overall_start = time.time()
+        
+        # 使用run_async_generator来监控每个组件的执行
+        async for partial_result in pipeline.run_async_generator(
+            data=data,
+            include_outputs_from=include_outputs
+        ):
+            # 获取执行完成的组件名
+            for component_name in partial_result.keys():
+                if component_name not in start_times:
+                    # 记录组件完成时间
+                    component_end = time.time()
+                    
+                    # 更新组件统计
+                    if component_name not in self.component_times:
+                        self.component_times[component_name] = 0
+                        self.component_counts[component_name] = 0
+                    
+                    # 假设我们不知道确切的开始时间，所以每个组件的时间是从整体开始到组件完成的时间
+                    # 在实际应用中，这个时间不够准确，但可作为估计
+                    component_time = component_end - overall_start
+                    self.component_times[component_name] += component_time
+                    self.component_counts[component_name] += 1
+                    
+                    # 保存组件结果
+                    component_results[component_name] = partial_result[component_name]
+                    
+                    # 如果是LLM组件，记录token使用情况
+                    if component_name == "llm":
+                        self.record_llm_usage(partial_result)
+        
+        # 计算总执行时间
+        overall_time = time.time() - overall_start
+        
+        # 返回结果
+        return {
+            "overall_time": overall_time,
+            "component_results": component_results
+        }
+    
+    def print_summary(self):
+        """打印Pipeline执行汇总情况"""
+        print("\n===== Pipeline执行统计 =====")
+        
+        for component_name, total_time in self.component_times.items():
+            calls = self.component_counts[component_name]
+            avg_time = total_time / calls if calls > 0 else 0
+            
+            print(f"\n组件: {component_name}")
+            print(f"  调用次数: {calls}")
+            print(f"  总执行时间: {total_time:.2f}秒")
+            print(f"  平均执行时间: {avg_time:.2f}秒")
+            
+            # 如果是LLM组件，打印token使用情况
+            if component_name == "llm" and self.llm_token_usage["total_tokens"] > 0:
+                print(f"  提示词tokens总数: {self.llm_token_usage['total_prompt_tokens']}")
+                print(f"  补全tokens总数: {self.llm_token_usage['total_completion_tokens']}")
+                print(f"  总tokens: {self.llm_token_usage['total_tokens']}")
+    
+    def visualize_execution_times(self, output_dir="token_usage_charts"):
+        """可视化组件执行时间"""
+        if not VISUALIZATION_AVAILABLE:
+            print("无法生成可视化: 缺少 matplotlib 或 pandas 库")
+            return
+        
+        # 创建输出目录
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # 准备数据
+        components = list(self.component_times.keys())
+        avg_times = [self.component_times[c] / self.component_counts[c] if self.component_counts[c] > 0 else 0 
+                   for c in components]
+        total_times = [self.component_times[c] for c in components]
+        
+        # 创建数据框
+        df = pd.DataFrame({
+            "组件": components,
+            "平均执行时间(秒)": avg_times,
+            "总执行时间(秒)": total_times
+        })
+        
+        # 创建图表
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+        
+        # 平均执行时间图表
+        df.plot(x="组件", y="平均执行时间(秒)", kind="bar", ax=ax1, color="skyblue")
+        ax1.set_title("各组件平均执行时间")
+        ax1.set_ylabel("执行时间(秒)")
+        ax1.grid(axis="y", linestyle="--", alpha=0.7)
+        
+        # 总执行时间图表
+        df.plot(x="组件", y="总执行时间(秒)", kind="bar", ax=ax2, color="salmon")
+        ax2.set_title("各组件总执行时间")
+        ax2.set_ylabel("执行时间(秒)")
+        ax2.grid(axis="y", linestyle="--", alpha=0.7)
+        
+        plt.tight_layout()
+        output_file = os.path.join(output_dir, "component_timing.png")
+        plt.savefig(output_file)
+        plt.close()
+        
+        print(f"组件执行时间图表已保存到 {output_file}")
+    
+    def save_to_file(self):
+        """保存执行统计到文件"""
+        # 计算平均时间
+        avg_times = {
+            component: self.component_times[component] / self.component_counts[component] 
+            if self.component_counts[component] > 0 else 0
+            for component in self.component_times
+        }
+        
+        data = {
+            "component_stats": {
+                component: {
+                    "total_calls": self.component_counts[component],
+                    "total_time": self.component_times[component],
+                    "avg_time": avg_times[component]
+                }
+                for component in self.component_times
+            },
+            "summary": {
+                "components": list(self.component_times.keys()),
+                "llm_token_usage": self.llm_token_usage
+            }
+        }
+        
+        # 为LLM组件添加token使用情况
+        if "llm" in data["component_stats"] and self.llm_token_usage["total_tokens"] > 0:
+            data["component_stats"]["llm"].update(self.llm_token_usage)
+        
+        with open(self.stats_file, "w") as f:
+            json.dump(data, f, indent=2)
+        
+        print(f"\n组件统计数据已保存到 {self.stats_file}")
+        
+        # 生成可视化
+        self.visualize_execution_times()
+
+
+# 创建组件
+retriever = InMemoryBM25Retriever(document_store=document_store)
+prompt_builder = ChatPromptBuilder(template=prompt_template)
+llm = OpenAIChatGenerator()
+
+# 创建异步管道
+rag_pipeline = AsyncPipeline()
+rag_pipeline.add_component("retriever", retriever)
+rag_pipeline.add_component("prompt_builder", prompt_builder)
+rag_pipeline.add_component("llm", llm)
+rag_pipeline.connect("retriever", "prompt_builder.documents")
+rag_pipeline.connect("prompt_builder", "llm")
+
+# 创建token跟踪器
 token_tracker = TokenUsageTracker()
+pipeline_analyzer = PipelineAnalyzer()
 
 async def run_query(question):
     """运行查询并记录token使用情况"""
@@ -510,17 +478,35 @@ async def run_query(question):
         "prompt_builder": {"question": question},
     }
     
-    results = await rag_pipeline.run(data)
+    # 使用pipeline_analyzer来分析pipeline执行
+    result_with_analysis = await pipeline_analyzer.analyze_pipeline_execution(
+        rag_pipeline, 
+        data, 
+        include_outputs=["retriever", "prompt_builder", "llm"]
+    )
+    
+    # 获取最终结果
+    results = result_with_analysis["component_results"]
     
     # 记录使用情况
     usage_data = token_tracker.record_usage(question, results)
     
+    answer_text = "未获得回答"
+    if "llm" in results and "replies" in results["llm"]:
+        answer_text = results["llm"]["replies"][0]._content[0].text
+    
     # 打印结果和使用情况
-    print(f"回答: {results['llm']['replies'][0]._content[0].text}")
+    print(f"回答: {answer_text}")
     print(f"查询耗时: {time.time() - start_time:.2f}秒")
     token_tracker.print_usage(usage_data)
     
-    return results
+    # 返回组合的结果
+    return {
+        "answer": answer_text,
+        "results": results,
+        "usage_data": usage_data,
+        "execution_time": time.time() - start_time
+    }
 
 # 运行示例查询
 import asyncio
@@ -537,21 +523,22 @@ async def main():
     # 保存token使用记录
     token_tracker.save_to_file()
     
-    # 打印pipeline组件统计
-    pipeline_monitor.print_summary()
+    # 打印pipeline执行统计
+    pipeline_analyzer.print_summary()
     
     # 保存pipeline统计
-    pipeline_monitor.save_to_file()
+    pipeline_analyzer.save_to_file()
     
     # 生成HTML报告
-    if REPORTER_AVAILABLE:
+    try:
+        from token_reporter import generate_token_usage_report
         generate_token_usage_report(
             token_log_file="token_usage_log.json",
             pipeline_stats_file="pipeline_stats.json",
             output_html="token_usage_report.html"
         )
         print("\nHTML报告已生成: token_usage_report.html")
-    else:
+    except ImportError:
         print("\n提示: 缺少token_reporter模块，无法生成HTML报告")
 
 # 运行主函数
