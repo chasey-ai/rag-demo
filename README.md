@@ -20,6 +20,9 @@ rag_demo/
 │   └── faiss_document_store.db # (示例) Haystack FAISS 索引文件
 │   └── document_store.faiss   # (示例) FAISS 索引的另一个常见命名
 ├── pipelines/                 # 存放 Haystack Pipeline 的定义
+│   ├── components/         # 存放原始文档 (PDF, TXT, MD 等)
+│   │   ├── doc1.pdf
+│   │   └── another_topic.txt
 │   ├── __init__.py
 │   ├── index.py               # 定义数据索引的 Haystack Pipeline
 │   ├── query.py               # 定义查询和生成的 Haystack Pipeline
@@ -45,6 +48,99 @@ rag_demo/
 3. **查询处理**：当用户提问时，系统使用`pipelines/query.py`中的流程检索相关文档并生成回答
 4. **前端交互**：通过Chainlit提供的界面，用户可以自然地与RAG系统进行对话
 
+```mermaid
+graph TD
+
+    %% 阶段一
+    subgraph "阶段一: 文件输入与转换 (Stage 1)"
+        FRC["FileRouterComponent<br/>FilePipeSplitter"]
+        TFD["TextFileToDocument"]
+        MTD["MarkdownToDocument"]
+        ITD["ImageToDocument"]
+        DTD["DOCXToDocument"]
+        PTD["PPTXToDocument"]
+        ATD["AudioToDocument"]
+    end
+
+    %% 阶段二
+    subgraph "阶段二: 文档合并 (Stage 2)"
+        DJ["DocumentJoiner"]
+    end
+
+    %% 阶段三
+    subgraph "阶段三: 元数据路由与初步处理 (Stage 3)"
+        MR["MetadataRouter"]
+        DC["DocumentCleaner"]
+        IOCRTD["ImageOCRToDocument"]
+        ICTD["ImageCaptionToDocument"]
+    end
+
+    %% 阶段四
+    subgraph "阶段四: 内容处理与切分 (Stage 4)"
+        EDS_clean["TextSplitter<br/>EnhancedDocumentSplitter"]
+        EDS_ocr["OCRSplitter<br/>EnhancedDocumentSplitter"]
+        DCluster_ocr["ClusterOCR<br/>DocumentCluster"]
+        EDS_caption["CaptionSplitter<br/>EnhancedDocumentSplitter"]
+        DCluster_caption["ClusterCaption<br/>DocumentCluster"]
+    end
+
+    %% 阶段五
+    subgraph "阶段五: 信息汇总 (Stage 5)"
+        DSum["DocumentSummarizer"]
+    end
+
+    %% 阶段六
+    subgraph "阶段六: 执行与嵌入 (Stage 6)"
+        PyExec["PythonExecutor"]
+        Embed["OpenAIDocumentEmbedder"]
+    end
+
+    %% 阶段七
+    subgraph "阶段七: 输出 (Stage 7)"
+        Filter["ImageFilter"]
+        Writer["DocumentWriter"]
+    end
+
+    %% 流程连接
+    FRC --> TFD
+    FRC --> MTD
+    FRC --> ITD
+    FRC --> DTD
+    FRC --> PTD
+    FRC --> ATD
+
+    TFD --> DJ
+    MTD --> DJ
+    ITD --> DJ
+    DTD --> DJ
+    PTD --> DJ
+    ATD --> DJ
+
+    DJ --> MR
+
+    MR --> DC
+    MR --> IOCRTD
+    MR --> ICTD
+
+    DC --> EDS_clean
+    IOCRTD --> EDS_ocr
+    ICTD --> EDS_caption
+
+    EDS_ocr --> DCluster_ocr
+    EDS_caption --> DCluster_caption
+
+    EDS_clean --> DSum
+    DCluster_ocr --> DSum
+    DCluster_caption --> DSum
+
+    DSum --> PyExec
+    PyExec --> Embed
+
+    Embed --> Filter
+    Filter --> Writer
+```
+
+
 ## 快速开始
 1. 安装依赖：
    ```bash
@@ -65,133 +161,10 @@ rag_demo/
    ```
 
 ## 代码仓库
-GitHub: https://github.com/YOUR_USERNAME/rag-demo
+GitHub: https://github.com/chasey-ai/rag-demo
 
 ## 贡献指南
 欢迎提交PR或Issue来改进此项目。具体贡献流程请参考贡献指南文档。
 
 ## 许可证
 MIT
-
-# Haystack RAG Token使用跟踪系统
-
-这是一个用于跟踪和分析Haystack RAG Pipeline中token使用情况的工具。该工具可以帮助您监控OpenAI API调用的token使用情况，生成可视化报告，以及分析pipeline中各组件的执行性能。
-
-## 功能特点
-
-- 记录每次查询的token使用情况（提示词、补全、总计）
-- 跟踪整个pipeline中各组件的执行时间和性能
-- 生成可视化图表，包括token分布、查询token使用趋势等
-- 生成HTML格式的详细报告
-- 保存原始数据以便进一步分析
-
-## 安装要求
-
-```bash
-pip install haystack-ai python-dotenv matplotlib pandas
-```
-
-## 使用方法
-
-1. 将token追踪组件集成到您的Haystack RAG pipeline中：
-
-```python
-# 创建token使用跟踪器
-token_tracker = TokenUsageTracker()
-
-# 创建pipeline监控器
-pipeline_monitor = PipelineMonitor()
-
-# 向pipeline添加回调
-for component_name in ["retriever", "prompt_builder", "llm"]:
-    rag_pipeline.add_component_callback(
-        component_name, 
-        pipeline_monitor.component_callback, 
-        pipeline_monitor.component_completion_callback
-    )
-
-# 在查询处理中记录token使用情况
-usage_data = token_tracker.record_usage(question, results)
-```
-
-2. 运行查询并获取统计信息：
-
-```python
-# 打印token使用情况汇总
-token_tracker.print_summary()
-
-# 保存token使用记录
-token_tracker.save_to_file()
-
-# 打印pipeline组件统计
-pipeline_monitor.print_summary()
-
-# 保存pipeline统计
-pipeline_monitor.save_to_file()
-
-# 生成HTML报告
-generate_token_usage_report()
-```
-
-## 输出示例
-
-### 控制台输出
-
-```
-===== Token使用汇总 =====
-查询总数: 3
-提示词tokens总数: 207
-补全tokens总数: 18
-总tokens: 225
-平均每次查询使用tokens: 75.00
-
-===== Pipeline组件执行统计 =====
-
-组件: retriever
-  调用次数: 3
-  总执行时间: 0.01秒
-  平均执行时间: 0.00秒
-
-组件: prompt_builder
-  调用次数: 3
-  总执行时间: 0.02秒
-  平均执行时间: 0.01秒
-
-组件: llm
-  调用次数: 3
-  总执行时间: 3.25秒
-  平均执行时间: 1.08秒
-  提示词tokens总数: 207
-  补全tokens总数: 18
-  总tokens: 225
-```
-
-### 数据文件
-
-- `token_usage_log.json`: 包含所有查询的详细token使用记录
-- `pipeline_stats.json`: 包含pipeline各组件的执行统计信息
-
-### 可视化图表
-
-- `token_distribution_pie.png`: token使用分布饼图
-- `token_usage_by_query.png`: 每次查询的token使用柱状图
-- `token_usage_trend.png`: token使用趋势图
-- `component_timing.png`: 组件执行时间图
-
-### HTML报告
-
-生成的HTML报告(`token_usage_report.html`)包含所有统计数据和图表，可在浏览器中查看。
-
-## 自定义与扩展
-
-您可以根据需要自定义以下内容：
-
-- `TokenUsageTracker`: 修改记录的token使用数据格式
-- `PipelineMonitor`: 添加更多组件性能指标
-- `generate_token_usage_report`: 自定义HTML报告格式和样式
-
-## 注意事项
-
-- 确保在生产环境中谨慎使用，因为记录详细数据可能会增加内存使用
-- 对于大型应用，考虑使用数据库而非JSON文件存储使用记录
-- 可视化功能需要安装matplotlib和pandas库

@@ -178,3 +178,7 @@ token_usage_charts/
 token_usage_log.json
 pipeline_stats.json
 token_usage_report.html
+
+.chainlit/
+index_results.json
+results.json
